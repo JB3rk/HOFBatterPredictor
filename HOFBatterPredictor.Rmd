@@ -1,0 +1,140 @@
+---
+title: "HOF Batter Prediction"
+author: "Jacob Berkowitz"
+date: "2/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Lahman)
+library(dplyr)
+library(caret)
+```
+
+# Goal
+
+We want to predict whether a player will be a hall of famer based on his career stats.
+
+## Step 1: Manipulate data and create usable dataframe
+
+```{r}
+data("HallOfFame")
+#get dataset
+df<-data_frame(HallOfFame)
+#only players
+df1<-HallOfFame%>%
+  dplyr::filter(category=='Player')%>%
+  group_by(playerID)%>%
+  filter(yearID==last(yearID))%>%
+  mutate(rate=votes/ballots)
+#add info
+df2<-left_join(df1,People,by="playerID")
+#fix batting
+bat<-Batting
+index<-is.na(bat)
+bat[index]<-0
+bat<-bat%>%
+  group_by(playerID)%>%
+  summarise(seasons=n(),
+            hits=sum(H),
+            AB=sum(AB),
+            X2B=sum(X2B),
+            X3B=sum(X3B),
+            HR=sum(HR),
+            K=sum(SO),
+            BB=sum(BB),
+            Games=sum(G),
+            SB=sum(SB))%>%
+  mutate(avg=hits/AB)%>%
+  mutate(slug=((hits-X2B-X3B-HR)+2*X2B+3*X3B+4*HR)/AB)%>%
+  mutate(kRate=K/AB)%>%
+  ungroup()%>%
+  mutate(BBperK=BB/K)
+#join batting
+df3<-left_join(bat,df2,by='playerID')%>%
+  mutate(yearRetired=substr(finalGame,1,4))
+
+#Appearances
+app<-Appearances%>%
+  group_by(playerID)%>%
+  summarize(pitch=sum(G_p))
+dfBat<-left_join(df3,app,by='playerID')%>%
+  ungroup%>%
+  filter(pitch<50)
+
+dfBat$eligible<-as.numeric(ifelse(is.na(dfBat$inducted),0,1))
+dfBat$inducted<-as.factor(dfBat$inducted)
+dfBat$inducted[is.na(dfBat$inducted)]<-'N'
+dfBat<-subset(dfBat, !is.nan(dfBat$avg))
+
+dfBat<- select(dfBat, eligible, inducted, eligible, hits, X2B, X3B, AB, SB, HR, BB, K, Games)
+```
+
+## Step 2: Split data into training and testing
+
+```{r}
+## 75% of the sample size
+smp_size <- floor(0.75 * nrow(dfBat))
+
+## set the seed to make the partition reproducible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(dfBat)), size = smp_size)
+
+train <- dfBat[train_ind, ]
+test <- dfBat[-train_ind, ]
+
+train.control <- trainControl(method = "cv", number = 10)
+```
+
+## Step 3: Fit our inital logistic regression using 10 fold cross validation
+
+```{r}
+tenfld <- caret::train(inducted~.,data=train, method = "glm", trControl = train.control,na.action=na.exclude)
+# Summarize the results
+print(tenfld)
+summary(tenfld)
+```
+
+## Step 4: Check results on test data
+
+```{r}
+test$pred_log<-predict(tenfld, newdata = test)
+
+table(test$inducted,test$pred_log)
+```
+
+Great model accuracy, but not false negative rate is too high. Let's make another model of only eligible players.
+
+## Step 5: Adjust model
+
+```{r}
+dfBat2<-subset(dfBat, dfBat$eligible==1)
+
+#TT split
+
+## 75% of the sample size
+smp_size <- floor(0.75 * nrow(dfBat2))
+
+## set the seed to make the partition reproducible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(dfBat2)), size = smp_size)
+
+train <- dfBat2[train_ind, ]
+test <- dfBat2[-train_ind, ]
+
+train.control <- trainControl(method = "cv", number = 10)
+
+tenfld <- caret::train(inducted~ . -eligible,data=train, method = "glm", trControl = train.control,na.action=na.exclude)
+# Summarize the results
+print(tenfld)
+summary(tenfld)
+
+test$pred_log<-predict(tenfld, newdata = test)
+#test$classify<-ifelse(test$pred_log>=0.5,1,0)
+table(test$inducted,test$pred_log)
+
+```
+
+Hm, our false negative rate is still really high.
+
