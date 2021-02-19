@@ -136,5 +136,15 @@ table(test$inducted,test$pred_log)
 
 ```
 
-Hm, our false negative rate is still really high.
+Hm, our false negative rate is still really high. Let's try playing around with the type of classifier.
+
+```{r}
+pred<-predict(tenfld, newdata = test, type='prob')
+test$pred_yes<-pred$`1`
+test$classify<-ifelse(test$pred_yes>=0.30,1,0)
+
+table(test$inducted,test$classify)
+```
+
+There, that's much better of a true negative rate.
 
